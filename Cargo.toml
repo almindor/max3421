@@ -1,0 +1,14 @@
+[package]
+name = "max3421"
+description = "MAX7734 USB Host Chip driver"
+version = "0.1.0"
+authors = ["Matti Virkkunen <mvirkkunen@gmail.com>", "Ales Katona <almindor@gmail.com>"]
+edition = "2018"
+license = "MIT"
+repository = "https://github.com/almindor/max3421"
+keywords = ["embedded-hal-driver", "max3421", "usb"]
+readme = "README.md"
+documentation = "https://docs.rs/max3421"
+
+[dependencies]
+embedded-hal = "0.2.5"
