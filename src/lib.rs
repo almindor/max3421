@@ -1,7 +1,7 @@
 #![no_std]
 
 use core::cmp::min;
-use embedded_hal::blocking::spi::{Transfer, Write};
+use embedded_hal::blocking::spi::{Operation, Transactional, Transfer, Write};
 use embedded_hal::digital::v2::OutputPin;
 use embedded_hal::blocking::delay::DelayUs;
 
@@ -34,9 +34,10 @@ impl Endpoint {
 
 impl<SPI, RES> Max<SPI, RES>
 where
-    SPI: Write<u8> + Transfer<u8>,
+    SPI: Write<u8> + Transfer<u8> + Transactional<u8>,
     <SPI as Transfer<u8>>::Error: core::fmt::Debug,
     <SPI as Write<u8>>::Error: core::fmt::Debug,
+    <SPI as Transactional<u8>>::Error: core::fmt::Debug,
     RES: OutputPin,
 {
     pub fn new(spi: SPI, res: RES, delay: &mut dyn DelayUs<u8>) -> Self {
@@ -181,11 +182,14 @@ where
 
     fn reset(&mut self, delay: &mut dyn DelayUs<u8>) {
         self.res.set_low().ok();
-        delay.delay_us(1); // 200ns minimum delay, let's be sure
+        delay.delay_us(10); // 200ns minimum delay, let's be sure
         self.res.set_high().ok();
+        delay.delay_us(10); // 200ns minimum delay, let's be sure
 
         // FDUPSPI
         self.reg_write(Reg::Pinctl, 0b00010000);
+
+        self.reg_read(Reg::Revision);
 
         self.reg_write(Reg::Usbctl, 0b00100000); // CHIPRES
         self.reg_write(Reg::Usbctl, 0); // Clear reset
@@ -258,8 +262,13 @@ where
     }
 
     fn fifo_write(&mut self, fifo: Outfifo, data: &[u8]) {
-        self.spi.write(&[fifo as u8]).unwrap();
-        self.spi.write(&data).unwrap();
+        let fifo_buf = [fifo as u8];
+
+        let mut ops = [
+            Operation::Write(&fifo_buf),
+            Operation::Write(&data),
+        ];
+        self.spi.exec(&mut ops).unwrap();
 
         if fifo == Outfifo::Snd {
             self.reg_write(Reg::Sndbc, data.len() as u8);
@@ -274,8 +283,11 @@ where
 
         let count = min(data.len(), self.reg_read(Reg::Rvcbc) as usize);
 
-        self.spi.write(&[1 << 3]).unwrap();
-        self.spi.transfer(&mut data[..count]).unwrap();
+        let mut ops = [
+            Operation::Write(&[1 << 3]),
+            Operation::Transfer(&mut data[..count]),
+        ];
+        self.spi.exec(&mut ops).unwrap();
 
         self.reg_write(Reg::Hirq, Hirq::Rcvdav as u8);
 
