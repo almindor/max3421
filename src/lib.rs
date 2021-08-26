@@ -40,20 +40,20 @@ where
     <SPI as Transactional<u8>>::Error: core::fmt::Debug,
     RES: OutputPin,
 {
-    pub fn new(spi: SPI, res: RES, delay: &mut dyn DelayUs<u8>) -> Self {
-        let mut max = Self {
+    pub fn new(spi: SPI, res: RES) -> Self {
+        Self {
             spi,
             res,
             peraddr: 0xff,
             sndtog: false,
             rcvtog: false,
             max_packet_size_0: 8,
-        };
+        }
+    }
 
-        max.reset(delay);
-        max.config_host();
-
-        max
+    pub fn init(&mut self, delay: &mut dyn DelayUs<u8>) {
+        self.reset(delay);
+        self.config_host();
     }
 
     pub fn get_revision(&mut self) -> u8 {
