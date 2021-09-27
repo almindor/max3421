@@ -1,9 +1,12 @@
-use embedded_hal::{blocking::spi::{Operation, Transactional, Transfer, Write}, digital::v2::OutputPin};
+use embedded_hal::{
+    blocking::spi::{Operation, Transactional, Transfer, Write},
+    digital::v2::OutputPin,
+};
 
 use super::Error;
 
 /// SPI interface
-pub trait SpiInterface {    
+pub trait SpiInterface {
     /// Execute the provided transactions
     fn exec_spi(&mut self, operations: &mut [Operation<u8>]) -> Result<(), Error>;
 }
@@ -24,10 +27,7 @@ pub struct SpiWithManualCS<SPI, CS> {
 
 impl<SPI, CS> SpiWithManualCS<SPI, CS> {
     pub fn new(spi: SPI, cs: CS) -> Self {
-        Self {
-            spi,
-            cs,
-        }
+        Self { spi, cs }
     }
 }
 
@@ -44,7 +44,7 @@ where
                 Operation::Write(data) => self.spi.write(data).map_err(|_| Error::WriteSPI)?,
                 Operation::Transfer(buf) => {
                     self.spi.transfer(buf).map_err(|_| Error::TransferSPI)?;
-                },
+                }
             }
         }
 

@@ -1,9 +1,9 @@
 use core::cmp::min;
+use embedded_hal::blocking::delay::DelayUs;
 use embedded_hal::blocking::spi::Operation;
 use embedded_hal::digital::v2::OutputPin;
-use embedded_hal::blocking::delay::{DelayUs};
 
-use crate::spiif::SpiInterface;
+use crate::spi_interface::SpiInterface;
 
 use super::*;
 
@@ -18,7 +18,7 @@ pub struct Max3421<SPI, RES> {
 
 impl<SPI, RES> Max3421<SPI, RES>
 where
-SPI: SpiInterface,
+    SPI: SpiInterface,
     RES: OutputPin,
 {
     pub fn new(spi: SPI, res: RES) -> Self {
@@ -55,7 +55,6 @@ SPI: SpiInterface,
                 0b01 => break Speed::Low,
                 _ => continue, // delay.delay_ms(pause),
             }
-            
         };
 
         if speed == Speed::Low {
@@ -83,9 +82,14 @@ SPI: SpiInterface,
         self.max_packet_size_0 = max_packet_size_0;
     }
 
-    pub fn control_in(&mut self, addr: u8, data: Option<&mut [u8]>, mut req: Request) -> Result<usize, Error> {
+    pub fn control_in(
+        &mut self,
+        addr: u8,
+        data: Option<&mut [u8]>,
+        mut req: Request,
+    ) -> Result<usize, Error> {
         req.direction = UsbDirection::In;
-        self.send_setup(addr, &mut req)?;
+        self.send_setup(addr, &req)?;
 
         let mut total = 0;
 
@@ -111,9 +115,14 @@ SPI: SpiInterface,
         Ok(total)
     }
 
-    pub fn control_out(&mut self, addr: u8, data: Option<&[u8]>, mut req: Request) -> Result<(), Error> {
+    pub fn control_out(
+        &mut self,
+        addr: u8,
+        data: Option<&[u8]>,
+        mut req: Request,
+    ) -> Result<(), Error> {
         req.direction = UsbDirection::Out;
-        self.send_setup(addr, &mut req)?;
+        self.send_setup(addr, &req)?;
 
         if let Some(data) = data {
             self.reg_write(Reg::Hctl, 0b10000000)?; // SNDTOG1
@@ -134,7 +143,12 @@ SPI: SpiInterface,
         self.do_xfr_wait(0x00, Hxfr::HsIn)
     }
 
-    pub fn interrupt_in(&mut self, addr: u8, ep: &mut Endpoint, data: &mut [u8]) -> Result<usize, Error> {
+    pub fn interrupt_in(
+        &mut self,
+        addr: u8,
+        ep: &mut Endpoint,
+        data: &mut [u8],
+    ) -> Result<usize, Error> {
         self.set_peraddr(addr)?;
 
         if ep.tog != self.rcvtog {
@@ -183,7 +197,7 @@ SPI: SpiInterface,
         self.reg_write(
             Reg::Mode,
             // 0b11000001
-            0b11001001
+            0b11001001,
         )?;
 
         // Turn on host power (kinda circuit dependent but this is a test so)
@@ -274,10 +288,7 @@ SPI: SpiInterface,
     fn fifo_write(&mut self, fifo: Outfifo, data: &[u8]) -> Result<(), Error> {
         let fifo_buf = [fifo as u8];
 
-        let mut ops = [
-            Operation::Write(&fifo_buf),
-            Operation::Write(&data),
-        ];
+        let mut ops = [Operation::Write(&fifo_buf), Operation::Write(data)];
         self.exec_spi(&mut ops)?;
 
         if fifo == Outfifo::Snd {
@@ -309,18 +320,14 @@ SPI: SpiInterface,
     fn reg_write(&mut self, reg: Reg, value: u8) -> Result<(), Error> {
         let buf = [((reg as u8) << 3) | 0x02, value];
 
-        let mut ops = [
-            Operation::Write(&buf)
-        ];
+        let mut ops = [Operation::Write(&buf)];
         self.exec_spi(&mut ops)
     }
 
     fn reg_read(&mut self, reg: Reg) -> Result<u8, Error> {
         let mut buf = [((reg as u8) << 3), 0x00];
 
-        let mut ops = [
-            Operation::Transfer(&mut buf)
-        ];
+        let mut ops = [Operation::Transfer(&mut buf)];
         self.exec_spi(&mut ops)?;
 
         Ok(buf[1])

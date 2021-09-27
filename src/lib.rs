@@ -1,13 +1,13 @@
 #![no_std]
 
 mod control;
-mod spiif;
 mod max;
+mod spi_interface;
 
 use control::*;
 
-pub use spiif::*;
 pub use max::*;
+pub use spi_interface::*;
 
 #[derive(Debug)]
 pub enum Error {
@@ -27,10 +27,7 @@ pub struct Endpoint {
 
 impl Endpoint {
     pub fn new(addr: u8) -> Self {
-        Self {
-            addr,
-            tog: false,
-        }
+        Self { addr, tog: false }
     }
 }
 

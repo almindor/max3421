@@ -122,9 +122,7 @@ impl Request {
     }*/
 
     pub fn serialize(&self, buf: &mut [u8]) {
-        buf[0] = (self.direction as u8)
-            | ((self.request_type as u8) << 5)
-            | (self.recipient as u8);
+        buf[0] = (self.direction as u8) | ((self.request_type as u8) << 5) | (self.recipient as u8);
         buf[1] = self.request;
         buf[2] = self.value as u8;
         buf[3] = (self.value >> 8) as u8;
