@@ -4,8 +4,7 @@ mod control;
 mod max;
 mod spi_interface;
 
-use control::*;
-
+pub use control::*;
 pub use max::*;
 pub use spi_interface::*;
 
@@ -18,6 +17,8 @@ pub enum Error {
     PinCS,
     Hrsl(Hrsl),
     OutOfRange(u8),
+    Timeout(u32),
+    InvalidJK(u8),
 }
 
 pub struct Endpoint {
