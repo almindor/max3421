@@ -2,17 +2,14 @@
 
 mod control;
 mod max;
-mod spi_interface;
 
 pub use control::*;
 pub use max::*;
-pub use spi_interface::*;
 
 #[derive(Debug)]
 pub enum Error {
-    TransferSPI,
-    WriteSPI,
-    ExecSPI,
+    DelayError,
+    SpiError,
     PinRST,
     PinCS,
     Hrsl(Hrsl),

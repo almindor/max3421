@@ -11,5 +11,5 @@ readme = "README.md"
 documentation = "https://docs.rs/max3421"
 
 [dependencies]
-embedded-hal = "0.2.5"
-hifive1 = "0.10.0"
+embedded-hal = "1.0.0-alpha.8"
+hifive1 = "0.11.0-alpha.1"

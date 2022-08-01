@@ -1,10 +1,8 @@
 use core::cmp::min;
-use embedded_hal::blocking::delay::DelayUs;
-use embedded_hal::blocking::spi::Operation;
-use embedded_hal::digital::v2::OutputPin;
+use embedded_hal::delay::blocking::DelayUs;
+use embedded_hal::digital::blocking::OutputPin;
 
-use crate::spi_interface::SpiInterface;
-
+use embedded_hal::spi::blocking::{SpiDevice, SpiBus, SpiBusWrite};
 use hifive1::sprintln;
 
 use super::*;
@@ -18,8 +16,6 @@ pub struct Max3421<SPI, RES> {
     max_packet_size_0: u8,
     status: Option<u8>,
 }
-
-type Delay = dyn DelayUs<u32>;
 
 static mut PREV_HRSL: u8 = 0;
 
@@ -46,7 +42,8 @@ fn print_hrsl(hrsl: u8, prefix: &str) {
 
 impl<SPI, RES> Max3421<SPI, RES>
 where
-    SPI: SpiInterface,
+    SPI: SpiDevice,
+    SPI::Bus: SpiBus,
     RES: OutputPin,
 {
     pub fn new(spi: SPI, res: Option<RES>) -> Self {
@@ -65,14 +62,17 @@ where
         (self.spi, self.res)
     }
 
-    pub fn init(&mut self, delay: &mut Delay) -> Result<(), Error> {
+    pub fn init<D>(&mut self, delay: &mut D) -> Result<(), Error>
+    where
+        D: DelayUs,
+    {
         // FDUPSPI - set SPI full duplex
         self.reg_write(Reg::Pinctl, 0b00010000)?;
 
         self.reset(delay)?;
 
         // wait for internal clock to be ready
-        match self.wait_usbirq(Usbirq::Oscok, delay, 500_000) {
+        match self.wait_usbirq(Usbirq::Oscok) {
             Err(Error::Timeout(_)) => sprintln!("\tOSCOK timeout, ignoring..."),
             Err(err) => return Err(err),
             Ok(()) => {}
@@ -120,7 +120,7 @@ where
         Ok(hrsl >> 6)
     }
 
-    pub fn wait_for_connection(&mut self, delay: &mut Delay) -> Result<Speed, Error> {
+    pub fn wait_for_connection(&mut self) -> Result<Speed, Error> {
         // clear CONDETIRQ
         self.reg_write(Reg::Hirq, Hirq::Condet as u8)?;
 
@@ -131,7 +131,7 @@ where
         let jk = self.query_jk("[C]")?;
         if jk == 0 {
             // wait for CONDET
-            self.wait_hirq(Hirq::Condet, delay, 10_000)?;
+            self.wait_hirq(Hirq::Condet)?;
         }
 
         let speed = loop {
@@ -162,10 +162,10 @@ where
 
         self.reg_write(Reg::Hirq, 0b0000_0001)?; // clear BUSRST IRQ
         self.reg_set(Reg::Hctl, hctl)?; // BUSRST + FRMRST if high speed
-        self.wait_hirq(Hirq::Busevent, delay, 10_000)?; // wait for BUSRST
+        self.wait_hirq(Hirq::Busevent)?; // wait for BUSRST
 
         self.reg_set(Reg::Mode, mode)?; // SOFKAENAB + LOWSPEED if low speed
-        self.wait_start_of_frame(delay)?;
+        self.wait_start_of_frame()?;
 
         self.rcvtog = false;
         self.sndtog = false;
@@ -175,11 +175,11 @@ where
         Ok(speed)
     }
 
-    pub fn wait_for_disconnect(&mut self, delay: &mut Delay) -> Result<(), Error> {
+    pub fn wait_for_disconnect(&mut self) -> Result<(), Error> {
         // let hctl = self.hctl(0b00000100);
         // sprintln!("HCTL SAMPLEBUS: {:#010b}", hctl);
         self.reg_write(Reg::Hctl, 0b00000100)?; // SAMPLEBUS
-        self.wait_hirq(Hirq::Condet, delay, 10_000)?;
+        self.wait_hirq(Hirq::Condet)?;
 
         loop {
             let jk = self.query_jk("[DC]")?;
@@ -195,8 +195,8 @@ where
         Ok(())
     }
 
-    pub fn wait_start_of_frame(&mut self, delay: &mut Delay) -> Result<(), Error> {
-        self.wait_hirq(Hirq::Frame, delay, 10_000)
+    pub fn wait_start_of_frame(&mut self) -> Result<(), Error> {
+        self.wait_hirq(Hirq::Frame)
     }
 
     pub fn set_max_packet_size_0(&mut self, max_packet_size_0: u8) {
@@ -208,10 +208,9 @@ where
         addr: u8,
         data: Option<&mut [u8]>,
         mut req: Request,
-        delay: &mut Delay,
     ) -> Result<usize, Error> {
         req.direction = UsbDirection::In;
-        self.send_setup(addr, &req, delay)?;
+        self.send_setup(addr, &req)?;
 
         let mut total = 0;
 
@@ -219,10 +218,11 @@ where
             self.reg_write(Reg::Hctl, 0b00100000)?; // RCVTOG1
 
             while total < data.len() {
-                self.do_xfr_wait(0x00, Hxfr::BulkIn, delay)?;
+                self.do_xfr_wait(0x00, Hxfr::BulkIn)?;
 
                 let count = min(self.max_packet_size_0 as usize, data.len() - total);
                 let nread = self.fifo_read(&mut data[total..total + count])?;
+                sprintln!("nread = {}", nread);
 
                 total += nread;
 
@@ -232,7 +232,7 @@ where
             }
         }
 
-        self.do_xfr_wait(0x80, Hxfr::HsOut, delay)?;
+        self.do_xfr_wait(0x80, Hxfr::HsOut)?;
 
         Ok(total)
     }
@@ -242,10 +242,9 @@ where
         addr: u8,
         data: Option<&[u8]>,
         mut req: Request,
-        delay: &mut Delay,
     ) -> Result<(), Error> {
         req.direction = UsbDirection::Out;
-        self.send_setup(addr, &req, delay)?;
+        self.send_setup(addr, &req)?;
 
         if let Some(data) = data {
             self.reg_write(Reg::Hctl, 0b10000000)?; // SNDTOG1
@@ -257,13 +256,13 @@ where
 
                 self.fifo_write(Outfifo::Snd, &data[total..total + count])?;
 
-                self.do_xfr_wait(0x00, Hxfr::BulkOut, delay)?;
+                self.do_xfr_wait(0x00, Hxfr::BulkOut)?;
 
                 total += count;
             }
         }
 
-        self.do_xfr_wait(0x00, Hxfr::HsIn, delay)
+        self.do_xfr_wait(0x00, Hxfr::HsIn)
     }
 
     pub fn interrupt_in(
@@ -271,20 +270,19 @@ where
         addr: u8,
         ep: &mut Endpoint,
         data: &mut [u8],
-        delay: &mut Delay,
     ) -> Result<usize, Error> {
         self.set_peraddr(addr)?;
 
         if ep.tog != self.rcvtog {
             self.reg_write(Reg::Hctl, if ep.tog { 0b00100000 } else { 0b00010000 })?;
         }
-        self.do_xfr_wait(ep.addr, Hxfr::BulkIn, delay)?;
+        self.do_xfr_wait(ep.addr, Hxfr::BulkIn)?;
         ep.tog = self.rcvtog;
 
         self.fifo_read(data)
     }
 
-    fn send_setup(&mut self, addr: u8, req: &Request, delay: &mut Delay) -> Result<(), Error> {
+    fn send_setup(&mut self, addr: u8, req: &Request) -> Result<(), Error> {
         let mut setup = [0u8; 8];
         req.serialize(&mut setup);
 
@@ -292,46 +290,31 @@ where
 
         self.fifo_write(Outfifo::Sud, &setup)?;
 
-        self.do_xfr_wait(0x00, Hxfr::Setup, delay)?;
+        self.do_xfr_wait(0x00, Hxfr::Setup)?;
 
         Ok(())
     }
 
-    fn reset(&mut self, delay: &mut Delay) -> Result<(), Error> {
+    fn reset<D>(&mut self, delay: &mut D) -> Result<(), Error>
+    where
+        D: DelayUs,
+    {
         if let Some(res) = &mut self.res {
             res.set_low().map_err(|_| Error::PinRST)?;
-            delay.delay_us(50); // 200ns minimum delay, let's be sure
+            delay.delay_us(50).map_err(|_| Error::DelayError)?; // 200ns minimum delay, let's be sure
             res.set_high().map_err(|_| Error::PinRST)?;
-            delay.delay_us(50); // 200ns minimum delay, let's be sure
+            delay.delay_us(50).map_err(|_| Error::DelayError)?; // 200ns minimum delay, let's be sure
         }
 
         // SW CHIPRST
         self.reg_write(Reg::Usbctl, 0b00100000)?; // CHIPRES
         self.reg_write(Reg::Usbctl, 0)?; // Clear reset
-        delay.delay_us(50); // 200ns minimum delay, let's be sure
+        delay.delay_us(50).map_err(|_| Error::DelayError)?; // 200ns minimum delay, let's be sure
 
         Ok(())
     }
 
-    fn wait_samplebus(&mut self) -> Result<(), Error> {
-        let mut prev_hctl = None;
-
-        loop {
-            let hctl = self.reg_read(Reg::Hctl)?;
-            if prev_hctl != Some(hctl) {
-                sprintln!("\tHCTL: {:#010b}", hctl);
-                prev_hctl = Some(hctl);
-            }
-
-            if (hctl & 0b0000_0100) == 0 {
-                break;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn wait_hirq(&mut self, irq: Hirq, delay: &mut Delay, pause: u32) -> Result<(), Error> {
+    fn wait_hirq(&mut self, irq: Hirq) -> Result<(), Error> {
         let mut prev_hirq = None;
         loop {
             let hirq = self.reg_read(Reg::Hirq)?;
@@ -346,17 +329,13 @@ where
                 sprintln!("\tHIRQ CLEARED: {:#010b}", irq as u8);
                 break;
             }
-
-            delay.delay_us(pause);
         }
 
         Ok(())
     }
 
-    fn wait_usbirq(&mut self, irq: Usbirq, delay: &mut Delay, max: u32) -> Result<(), Error> {
+    fn wait_usbirq(&mut self, irq: Usbirq) -> Result<(), Error> {
         let mut prev_val = None;
-        let step = 10_000;
-        let mut total = 0;
 
         loop {
             let usbirq = self.reg_read(Reg::Usbirq)?;
@@ -368,22 +347,16 @@ where
             if usbirq & (irq as u8) != 0 {
                 break;
             }
-
-            delay.delay_us(step);
-            total += step;
-            if total > max {
-                return Err(Error::Timeout(total));
-            }
         }
 
         Ok(())
     }
 
-    fn do_xfr(&mut self, ep: u8, xfr: Hxfr, delay: &mut Delay) -> Result<Hrsl, Error> {
+    fn do_xfr(&mut self, ep: u8, xfr: Hxfr) -> Result<Hrsl, Error> {
         self.reg_write(Reg::Hxfr, (xfr as u8) << 4 | (ep & 0x0f))?;
 
         loop {
-            self.wait_hirq(Hirq::Hxfrdn, delay, 10_000)?;
+            self.wait_hirq(Hirq::Hxfrdn)?;
 
             let hrsl = self.reg_read(Reg::Hrsl)?;
 
@@ -415,9 +388,9 @@ where
     //     Ok(result)
     // }
 
-    fn do_xfr_wait(&mut self, ep: u8, xfr: Hxfr, delay: &mut Delay) -> Result<(), Error> {
+    fn do_xfr_wait(&mut self, ep: u8, xfr: Hxfr) -> Result<(), Error> {
         loop {
-            match self.do_xfr(ep, xfr, delay)? {
+            match self.do_xfr(ep, xfr)? {
                 Hrsl::Success => return Ok(()),
                 Hrsl::Nak => continue,
                 err => return Err(Error::Hrsl(err)),
@@ -437,8 +410,11 @@ where
     fn fifo_write(&mut self, fifo: Outfifo, data: &[u8]) -> Result<(), Error> {
         let fifo_buf = [fifo as u8];
 
-        let mut ops = [Operation::Write(&fifo_buf), Operation::Write(data)];
-        self.exec_spi(&mut ops)?;
+        // let mut ops = [Operation::Write(&fifo_buf), Operation::Write(data)];
+        self.spi.transaction(|bus| {
+            bus.write(&fifo_buf)?;
+            bus.write(data)
+        }).map_err(|_| Error::SpiError)?;
 
         if fifo == Outfifo::Snd {
             self.reg_write(Reg::Sndbc, data.len() as u8)?;
@@ -455,11 +431,10 @@ where
 
         let count = min(data.len(), self.reg_read(Reg::Rvcbc)? as usize);
 
-        let mut ops = [
-            Operation::Write(&[1 << 3]),
-            Operation::Transfer(&mut data[..count]),
-        ];
-        self.exec_spi(&mut ops)?;
+        self.spi.transaction(|bus| {
+            bus.write(&[1 << 3])?;
+            bus.transfer_in_place(&mut data[..count])
+        }).map_err(|_| Error::SpiError)?;
 
         self.reg_write(Reg::Hirq, Hirq::Rcvdav as u8)?;
 
@@ -471,8 +446,10 @@ where
 
         // sprintln!("REG WRITE[{:?}]: {:#010b}", reg, value);
 
-        let mut ops = [Operation::Transfer(&mut buf)];
-        self.exec_spi(&mut ops)?;
+        // let mut ops = [Operation::Transfer(&mut buf)];
+        self.spi.transaction(|bus| {
+            bus.transfer_in_place(&mut buf)
+        }).map_err(|_| Error::SpiError)?;
 
         self.set_status(buf[0]);
         Ok(buf[0]) // return status byte for every write after FDUPSPI = 1
@@ -489,8 +466,10 @@ where
     fn reg_read(&mut self, reg: Reg) -> Result<u8, Error> {
         let mut buf = [((reg as u8) << 3), 0x00];
 
-        let mut ops = [Operation::Transfer(&mut buf)];
-        self.exec_spi(&mut ops)?;
+        // let mut ops = [Operation::Transfer(&mut buf)];
+        self.spi.transaction(|bus| {
+            bus.transfer_in_place(&mut buf)
+        }).map_err(|_| Error::SpiError)?;
 
         Ok(buf[1])
     }
@@ -498,15 +477,6 @@ where
     fn reg_set(&mut self, reg: Reg, bits: u8) -> Result<u8, Error> {
         let v = self.reg_read(reg)?;
         self.reg_write(reg, v | bits)
-    }
-
-    fn reg_clear(&mut self, reg: Reg, bits: u8) -> Result<u8, Error> {
-        let v = self.reg_read(reg)?;
-        self.reg_write(reg, v & !bits)
-    }
-
-    fn exec_spi(&mut self, ops: &mut [Operation<u8>]) -> Result<(), Error> {
-        self.spi.exec_spi(ops)
     }
 
     fn set_status(&mut self, val: u8) {
